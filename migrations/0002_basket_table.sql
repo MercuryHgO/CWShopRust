@@ -1,0 +1,7 @@
+CREATE TABLE basket (
+
+  id VARCHAR(255) PRIMARY KEY,
+  itemId VARCHAR(255) NOT NULL,
+  userId VARCHAR(255) NOT NULL
+
+);
