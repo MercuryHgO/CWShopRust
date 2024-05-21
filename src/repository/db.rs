@@ -1,10 +1,8 @@
-extern crate proc_macro;
-use proc_macro::TokenStream;
-
 use crate::PgPoolOptions;
 
+use actix_web::http::StatusCode;
 use dotenv::dotenv;
-use sqlx::{ Pool, Postgres};
+use sqlx::{ error::{DatabaseError, ErrorKind}, Pool, Postgres};
 
 pub struct Database;
 
@@ -28,3 +26,58 @@ impl GetPool<Postgres> for Database {
     }
 }
 
+// SQLX Wrappers
+
+#[derive(Debug)]
+pub struct SqlxError(sqlx::Error);
+
+impl std::fmt::Display for SqlxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{}",self.0)
+    }
+}
+
+// Into implementations
+
+impl From<sqlx::Error> for SqlxError {
+    fn from(value: sqlx::Error) -> Self {
+        SqlxError(value)
+    }
+}
+
+impl From<SqlxError> for sqlx::Error {
+    fn from(value: SqlxError) -> Self {
+        value.0
+    }
+}
+
+impl From<SqlxError> for StatusCode {
+    fn from(value: SqlxError) -> Self {
+
+        match sqlx::Error::from(value) {
+            sqlx::Error::Database(error) => {
+                match error.kind() {
+                    ErrorKind::UniqueViolation => StatusCode::CONFLICT,
+                    ErrorKind::ForeignKeyViolation => StatusCode::BAD_REQUEST,
+                    ErrorKind::NotNullViolation => StatusCode::NOT_ACCEPTABLE,
+                    ErrorKind::CheckViolation => StatusCode::FORBIDDEN,
+                    ErrorKind::Other => StatusCode::INTERNAL_SERVER_ERROR,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                }
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR
+        }
+
+    }
+}
+
+impl serde::Serialize for SqlxError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        serializer.serialize_str(&format!("{}",self.0))
+    }
+}
+
+
+impl std::error::Error for SqlxError { }

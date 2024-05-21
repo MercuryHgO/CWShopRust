@@ -1,11 +1,39 @@
-use sqlx::FromRow;
+use crate::repository::db::SqlxError;
 use core::fmt;
-
+use lib_utils::validation::{self, validate_rules, Rules, Validate};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use sqlx::{Pool, Postgres};
-use uuid::Uuid;
 
+// Custom validation rules
+
+#[derive(Debug)]
+enum CustomRules {
+    LoginCanContain,
+}
+impl std::fmt::Display for CustomRules {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Can contain only letters, numbers, underscores, and periods."
+        )
+    }
+}
+
+impl validation::Rule for CustomRules {}
+
+impl Validate<String> for CustomRules {
+    fn validate(&self, value: &String) -> validation::Result<&Self> {
+        let re = r"^[a-zA-Z0-9_.]*$";
+        let regex = Regex::new(re).unwrap();
+        if regex.is_match(value) {
+            Ok(self)
+        } else {
+            Err(validation::Error::RuleNotValidated(self))
+        }
+    }
+}
 
 // Database fields
 
@@ -15,38 +43,29 @@ pub struct Name(String);
 
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"{}",self.0)
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::convert::From<String> for Name {
+    fn from(value: String) -> Self {
+        Name(value)
     }
 }
 
 impl Name {
-    pub fn parse(name: String) -> Result<Self,Vec<String>> {
-        let mut validation_errors: Vec<String> = Vec::<String>::new();
+    pub fn parse(name: String) -> Result<Self, Vec<validation::Error<'static>>> {
+        let errors = validate_rules(
+            &name,
+            &[&Rules::MinLength(3), &Rules::ContainsDidgits(false)],
+        )
+        .to_vec();
 
-        // Length
-        {
-            let re = r"^.{3,}$";
-            let regex = Regex::new(re).unwrap();
-            if !regex.is_match(&name) {
-                validation_errors.push("Name must be minimum 3 charaters long".to_string());
-            };
-        }
-
-        // Digits
-        {
-            let re = r"\d";
-            let regex = Regex::new(re).unwrap();
-            if regex.is_match(&name) {
-                validation_errors.push("Name must not contain digits".to_string());
-            };
-        }
-
-        if validation_errors.is_empty() {
+        if errors.is_empty() {
             Ok(Name(name))
         } else {
-            Err(validation_errors)
+            Err(errors)
         }
-
     }
 }
 
@@ -57,46 +76,28 @@ impl sqlx::Type<sqlx::Postgres> for Name {
 }
 
 // Login
-#[derive(Debug, Serialize,Deserialize, sqlx::Decode, sqlx::Encode)]
+#[derive(Debug, Serialize, Deserialize, sqlx::Decode, sqlx::Encode)]
 pub struct Login(String);
 
 impl fmt::Display for Login {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"{}",self.0)
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::convert::From<String> for Login {
+    fn from(value: String) -> Self {
+        Login(value)
     }
 }
 
 impl Login {
-    pub fn parse(login: String) -> Result<Self,Vec<String>> {
-        let mut validation_errors: Vec<String> = Vec::<String>::new();
-
-        // Min length
-        {
-            let re = r"^.{3,}$";
-            let regex = Regex::new(re).unwrap();
-            if !regex.is_match(&login) {
-                validation_errors.push("Login must be minimum 3 charaters long".to_string());
-            };
-        }
-
-
-        // Max length
-        {
-            let re = r"^.{0,20}$";
-            let regex = Regex::new(re).unwrap();
-            if !regex.is_match(&login) {
-                validation_errors.push("Login must be maximum 20 charaters long".to_string());
-            };
-        }
-
-        // Contain
-        {
-            let re = r"^[a-zA-Z0-9_.]*$";
-            let regex = Regex::new(re).unwrap();
-            if !regex.is_match(&login) {
-                validation_errors.push("Login can contain only letters, numbers, underscores, and periods.".to_string());
-            };
-        }
+    pub fn parse(login: String) -> Result<Self, Vec<validation::Error<'static>>> {
+        let validation_errors = [
+            validate_rules(&login, &[&Rules::MinLength(3), &Rules::MaxLength(20)]),
+            validate_rules(&login, &[&CustomRules::LoginCanContain]),
+        ]
+        .concat();
 
         if validation_errors.is_empty() {
             Ok(Login(login))
@@ -113,50 +114,34 @@ impl sqlx::Type<sqlx::Postgres> for Login {
 }
 
 // Password
-#[derive(Debug, Serialize,Deserialize, sqlx::Decode, sqlx::Encode)]
+#[derive(Debug, Serialize, Deserialize, sqlx::Decode, sqlx::Encode)]
 pub struct Password(String);
 
 impl fmt::Display for Password {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"{}",self.0)
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::convert::From<String> for Password {
+    // Converts to string WITHOUT VALIDATION
+    fn from(value: String) -> Self {
+        Password(value)
     }
 }
 
 impl Password {
-    pub fn parse(password: String) -> Result<Self,Vec<String>> {
-        let mut validation_errors: Vec<String> = Vec::<String>::new();
-
-        {
-            let re = r#"^(^.*[a-z]$)
-                        (^.*[A-Z]$)
-                        (^?=.*\d$)
-                        (^.*[@$!%*?&]$)
-                        [A-Za-z\d@$!%*?&]
-                        {8,20}$"#;
-            let regex = Regex::new(re).unwrap();
-
-            if let Some(captures) = regex.captures(&password) {
-                // Rule 1: At least one lowercase character
-                if captures.get(1).is_none() {
-                   validation_errors.push("Password must contain minimum one lowercase letter".to_string());
-                }
-
-                // Rule 2: At least one uppercase character
-                if captures.get(2).is_none() {
-                   validation_errors.push("Password must contain minimum one uppercate character".to_string());
-                }
-
-                // Rule 3: At least one digit
-                if captures.get(3).is_none() {
-                    validation_errors.push("Password must contain at least one digit".to_string());
-                }
-
-                // Rule 4: At least one of special characters
-                if captures.get(4).is_none() {
-                    validation_errors.push("Password must contain at least one of special characters: @ $ ! % * ? &".to_string());
-                }
-            }
-        }
+    pub fn parse(password: String) -> Result<Self, Vec<validation::Error<'static>>> {
+        let validation_errors = validate_rules(
+            &password,
+            &[
+                &Rules::ContainsLowecaseCharacter(true),
+                &Rules::ContainsUppercaseCharacter(true),
+                &Rules::ContainsDidgits(true),
+                &Rules::ContainsSpecialCharacters(true),
+            ],
+        )
+        .to_vec();
 
         if validation_errors.is_empty() {
             Ok(Password(password))
@@ -172,111 +157,176 @@ impl sqlx::Type<sqlx::Postgres> for Password {
     }
 }
 
+// Uuid
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, sqlx::Decode, sqlx::Encode)]
+pub struct Uuid(uuid::Uuid);
+
+impl sqlx::Type<sqlx::Postgres> for Uuid {
+    fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
+        <uuid::Uuid as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+}
+
+impl std::fmt::Display for Uuid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::convert::From<String> for Uuid {
+    fn from(value: String) -> Self {
+        let bytes: [u8; 16] = value
+            .as_bytes()
+            .try_into()
+            .expect("Error converting from String to Uuid: UUID must be 16 bytes");
+
+        Uuid(uuid::Builder::from_bytes(bytes).into_uuid())
+    }
+}
+
+impl Uuid {
+    pub fn parse(uuid: uuid::Uuid) -> Self {
+        Uuid(uuid)
+    }
+}
 
 // Database type
 #[derive(Serialize, Deserialize, FromRow)]
 pub(crate) struct User {
-    id: Uuid,
-    name: Name,
-    login: Login,
-    password: Password
+    pub id: Uuid,
+    pub name: Name,
+    pub login: Login,
+    pub password: Password,
 }
 
-trait UserRepository<T: sqlx::Database> {
-    async fn fetch_all_users(db: &Pool<T>) -> Result<Vec<User>,sqlx::Error>;
-    async fn fetch_user(db: &Pool<T>, user_id: Uuid) -> Result<User,sqlx::Error>;
+pub trait UserRepository<T: sqlx::Database> {
+    async fn fetch_all_users(db: &Pool<T>) -> Result<Vec<User>, SqlxError>;
+    async fn fetch_user(db: &Pool<T>, user_id: Uuid) -> Result<User, SqlxError>;
 
-    async fn create_user(db: &Pool<T>, user: User) -> Result<User,sqlx::Error>;
-    async fn create_many_users(db: &Pool<T>, users: Vec<User>) -> Result<Vec<User>,sqlx::Error>;
+    async fn create_user(db: &Pool<T>, user: User) -> Result<(), SqlxError>;
+    async fn create_many_users(db: &Pool<T>, users: Vec<User>) -> Result<(), SqlxError>;
 
-    async fn delete_user(db: &Pool<T>, user_id: Uuid) -> Result<(),sqlx::Error>;
-    async fn delete_many_users(db: &Pool<T>, users_id: Vec<Uuid>) -> Result<(),sqlx::Error>;
+    async fn delete_user(db: &Pool<T>, user_id: Uuid) -> Result<(), SqlxError>;
+    async fn delete_many_users(db: &Pool<T>, users_id: Vec<Uuid>) -> Result<(), SqlxError>;
 
-    async fn patch_user(db: &Pool<T>, user: User) -> Result<User,sqlx::Error>;
-    async fn patch_many_users(db: &Pool<T>, users: Vec<User>) -> Result<Vec<User>,sqlx::Error>;
+    async fn patch_user(db: &Pool<T>, user: User) -> Result<(), SqlxError>;
+    async fn patch_many_users(db: &Pool<T>, users: Vec<User>) -> Result<(), SqlxError>;
+}
 
+pub struct Builder {
+    id: Option<Uuid>,
+    name: Option<Name>,
+    login: Option<Login>,
+    password: Option<Password>,
+}
+
+impl Builder {
+    pub fn new() -> Builder {
+        Builder {
+            id: None,
+            name: None,
+            login: None,
+            password: None,
+        }
+    }
+
+    pub fn id(&mut self, id: Uuid) {
+        self.id = Some(id);
+    }
+    pub fn name(&mut self, name: Name) {
+        self.name = Some(name);
+    }
+    pub fn login(&mut self, login: Login) {
+        self.login = Some(login);
+    }
+    pub fn password(&mut self, password: Password) {
+        self.password = Some(password);
+    }
+
+    pub fn try_get(self) -> Option<User> {
+        Some(User {
+            name: self.name?,
+            id: self.id?,
+            login: self.login?,
+            password: self.password?,
+        })
+    }
 }
 
 impl UserRepository<Postgres> for User {
-    async fn fetch_all_users(db: &Pool<Postgres>) -> Result<Vec<User>,sqlx::Error> {
-        sqlx::query_as::<_,User>("SELECT id, first_name, last_name FROM users")
+    async fn fetch_all_users(db: &Pool<Postgres>) -> Result<Vec<User>, SqlxError> {
+        // sqlx::query_as::<_,User>("SELECT id, first_name, last_name FROM users")
+        //     .fetch_all(db)
+        //     .await
+        Ok(sqlx::query_as!(User, "SELECT * FROM users",)
             .fetch_all(db)
-            .await
+            .await?)
     }
 
-    async fn create_user(db : &Pool<Postgres>, user: User) -> Result<User,sqlx::Error> {
-        sqlx::query_as::<_,User>("INSERT INTO users (id, name, login, password) VALUES $1, $2, $3, $4")
-            .bind(user.id)
-            .bind(user.name)
-            .bind(user.login)
-            .bind(user.password)
-            .fetch_one(db)
-            .await
+    async fn create_user(db: &Pool<Postgres>, user: User) -> Result<(), SqlxError> {
+        // sqlx::query_as::<_,User>("INSERT INTO users (id, name, login, password) VALUES $1, $2, $3, $4")
+        //     .bind(user.id)
+        //     .bind(user.name)
+        //     .bind(user.login)
+        //     .bind(user.password)
+        //     .fetch_one(db)
+        //     .await
+        sqlx::query_as!(
+            User,
+            "INSERT INTO users (id, name, login, password) VALUES ($1, $2, $3, $4)",
+            &user.id.to_string(),
+            &user.name.0,
+            &user.login.0,
+            &user.password.0
+        )
+        .execute(db)
+        .await?;
+        Ok(())
     }
 
-    async fn fetch_user(db: &Pool<Postgres>, user_id: Uuid) -> Result<User,sqlx::Error> {
-        sqlx::query_as::<_,User>("SELECT * FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(db)
-            .await
+    async fn fetch_user(db: &Pool<Postgres>, user_id: Uuid) -> Result<User, SqlxError> {
+        Ok(
+            sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_one(db)
+                .await?,
+        )
     }
 
-    async fn create_many_users(db: &Pool<Postgres>, users: Vec<User>) -> Result<Vec<User>,sqlx::Error> {
-        let mut created_users = Vec::<User>::new();
-
+    async fn create_many_users(db: &Pool<Postgres>, users: Vec<User>) -> Result<(), SqlxError> {
         let mut tx = db.begin().await?;
 
         for user in users {
-            let result = sqlx::query("INSERT INTO users (id, name, login, password) VALUES $1, $2, $3, $4")
-                .bind(user.id)
-                .bind(&user.name)
-                .bind(&user.login)
-                .bind(&user.password)
-                .execute(&mut *tx)
-                .await;
-
-            match result {
-                Ok(_) => {
-                    created_users.push(user);
-                },
-                Err(err) => {
-                    tx.rollback().await?;
-                    return Err(err);
-                },
-            }
-
+            sqlx::query!(
+                "INSERT INTO users (id, name, login, password) VALUES ($1, $2, $3, $4)",
+                &user.id.to_string(),
+                &user.name.0,
+                &user.login.0,
+                &user.password.0,
+            )
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
 
-        Ok(created_users)
+        Ok(())
     }
 
-    async fn delete_user(db: &Pool<Postgres>, user_id: Uuid) -> Result<(),sqlx::Error> {
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
+    async fn delete_user(db: &Pool<Postgres>, user_id: Uuid) -> Result<(), SqlxError> {
+        sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.to_string())
             .execute(db)
             .await?;
         Ok(())
     }
 
-    async fn delete_many_users(db: &Pool<Postgres>, users_id: Vec<Uuid>) -> Result<(),sqlx::Error> {
+    async fn delete_many_users(db: &Pool<Postgres>, users_id: Vec<Uuid>) -> Result<(), SqlxError> {
         let mut tx = db.begin().await?;
 
         for user_id in users_id {
-            let result = sqlx::query("DELETE FROM users WHERE id = $1")
-                .bind(user_id)
+            sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.to_string())
                 .execute(&mut *tx)
-                .await;
-
-            match result {
-                Ok(_) => {},
-                Err(err) => {
-                    tx.rollback().await?;
-                    return Err(err);
-                },
-            }
-
+                .await?;
         }
 
         tx.commit().await?;
@@ -284,47 +334,36 @@ impl UserRepository<Postgres> for User {
         Ok(())
     }
 
-    async fn patch_user(db: &Pool<Postgres>, user: User) -> Result<User,sqlx::Error> {
-        sqlx::query_as::<_,User>("UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1")
-                .bind(user.id)
-                .bind(&user.name)
-                .bind(&user.login)
-                .bind(&user.password)
-                .fetch_one(db)
-                .await
+    async fn patch_user(db: &Pool<Postgres>, user: User) -> Result<(), SqlxError> {
+        sqlx::query!(
+            "UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1",
+            &user.id.to_string(),
+            &user.name.0,
+            &user.login.0,
+            &user.password.0
+        )
+        .execute(db)
+        .await?;
+        Ok(())
     }
 
-    async fn patch_many_users(db: &Pool<Postgres>, users: Vec<User>) -> Result<Vec<User>,sqlx::Error> {
-        let mut patched_users = Vec::<User>::new();
-
+    async fn patch_many_users(db: &Pool<Postgres>, users: Vec<User>) -> Result<(), SqlxError> {
         let mut tx = db.begin().await?;
 
         for user in users {
-            let result = sqlx::query("UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1")
-                .bind(user.id)
-                .bind(&user.name)
-                .bind(&user.login)
-                .bind(&user.password)
-                .execute(&mut *tx)
-                .await;
-
-            match result {
-                Ok(_) => {
-                    patched_users.push(user)
-                },
-                Err(err) => {
-                    tx.rollback().await?;
-                    return Err(err);
-                },
-            }
+            sqlx::query!(
+                "UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1",
+                &user.id.to_string(),
+                &user.name.0,
+                &user.login.0,
+                &user.password.0,
+            )
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
 
-        Ok(patched_users)
+        Ok(())
     }
-
-
 }
-
-

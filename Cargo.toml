@@ -1,3 +1,4 @@
+workspace = { members = ["libs/lib-utils"] }
 [package]
 name = "CWShopRust"
 version = "0.1.0"
@@ -6,6 +7,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+lib-utils = { path = "./libs/lib-utils/" }
+
 actix = "0.13.0"
 actix-web = "4.2.1"
 dotenv = "0.15.0"
@@ -14,3 +17,4 @@ serde_json = "1.0.86"
 sqlx = { version = "0.7.4", features = ["postgres", "runtime-async-std-native-tls", "uuid"] }
 uuid = { version = "1.7.0", features = ["v4", "serde"] }
 regex = "1.5"
+env_logger = "0.11.3"
