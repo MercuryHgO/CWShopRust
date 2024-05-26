@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_web::{web::Data, App, HttpServer};
 use app::controllers::services;
 use repository::db::GetPool;
@@ -9,7 +11,8 @@ mod repository;
 
 #[derive(Clone)]
 pub struct AppState {
-    db: Pool<Postgres>,
+    db: Arc<Pool<Postgres>>,
+    cache: Arc<redis::Connection>
 }
 
 #[actix_web::main]
@@ -17,7 +20,8 @@ async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     let app_state = AppState {
-        db: repository::db::Database::get_pool().await,
+        db: Arc::new(repository::db::Database::get_pool().await),
+        cache: Arc::new(repository::cache::create_connection().await)
     };
 
     HttpServer::new(move || {

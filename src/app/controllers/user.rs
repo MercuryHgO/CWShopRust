@@ -4,7 +4,7 @@ use actix_web::{http::StatusCode, post, web::{Data, Json}, HttpRequest, HttpResp
 use lib_utils::validation;
 use serde::Deserialize;
 
-use crate::{app::models::user::{self, Login, Name, Password, User, UserRepository}, repository::db::SqlxError, AppState};
+use crate::{app::models::user::{self, Login, Name, Password, User, UserRepository}, AppState};
 
 
 #[derive(Deserialize)]
