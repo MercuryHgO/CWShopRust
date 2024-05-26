@@ -1,0 +1,18 @@
+[m                                                       [1;33mw
+[m[1;33marning[39m:[22m `CWShopRust` (bin "CWShopRust") generated 4 warn
+[mings (run `cargo fix --bin "CWShopRust"` to apply 3 sugg
+[mestions)
+[m[1;32m    Finished[22;39m dev [unoptimized + debuginfo] target(s) in 
+[m7.08s
+[m[1;32m     Running[22;39m `target/debug/CWShopRust`
+[m[90m[[39m2024-05-21T12:45:49Z [32mINFO [39m actix_server::builder[90m][39m start
+[ming 4 workers
+[m[90m[[39m2024-05-21T12:45:49Z [32mINFO [39m actix_server::server[90m][39m Actix 
+[mruntime found; starting in Actix runtime
+[m 
+
+
+
+
+
+[m:
