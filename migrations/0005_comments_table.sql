@@ -1,8 +1,8 @@
 CREATE TABLE comment (
 
-  id VARCHAR(255) PRIMARY KEY,
+  id BYTEA PRIMARY KEY,
   comment TEXT NOT NULL,
-  userId VARCHAR(255) NOT NULL,
-  productId VARCHAR(255) NOT NULL
+  userId BYTEA NOT NULL,
+  productId BYTEA NOT NULL
 
 );

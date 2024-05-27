@@ -55,16 +55,7 @@ impl From<SqlxError> for StatusCode {
     fn from(value: SqlxError) -> Self {
 
         match sqlx::Error::from(value) {
-            sqlx::Error::Database(error) => {
-                match error.kind() {
-                    ErrorKind::UniqueViolation => StatusCode::CONFLICT,
-                    ErrorKind::ForeignKeyViolation => StatusCode::BAD_REQUEST,
-                    ErrorKind::NotNullViolation => StatusCode::NOT_ACCEPTABLE,
-                    ErrorKind::CheckViolation => StatusCode::FORBIDDEN,
-                    ErrorKind::Other => StatusCode::INTERNAL_SERVER_ERROR,
-                    _ => StatusCode::INTERNAL_SERVER_ERROR,
-                }
-            }
+            sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR
         }
 

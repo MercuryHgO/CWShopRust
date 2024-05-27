@@ -3,6 +3,7 @@ use actix_web::{web::{self, scope}, Responder, Scope};
 pub mod user;
 
 pub fn services() -> Scope {
-    scope("/user/")
+    scope("/user")
         .service(user::sign_up)
+        .service(user::sign_in)
 }

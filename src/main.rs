@@ -28,7 +28,6 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(Data::new(app_state.clone()))
             .service(services())
-            .service(app::controllers::user::sign_up)
     })
     .bind(("127.0.0.1", 8080))?
     .run()

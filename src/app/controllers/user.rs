@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use actix_web::{http::StatusCode, post, web::{Data, Json}, HttpRequest, HttpResponse, Responder};
 use lib_utils::validation;
@@ -8,14 +8,14 @@ use crate::{app::models::user::{self, Login, Name, Password, User, UserRepositor
 
 
 #[derive(Deserialize)]
-struct SignInBody {
+struct SignUpBody {
     login: String,
     password: String,
     name: String
 }
 
 #[post("/signup")]
-pub async fn sign_up(_req: HttpRequest, body: Json<SignInBody>, db: Data<AppState>) -> impl Responder {
+pub async fn sign_up(_req: HttpRequest, body: Json<SignUpBody>, db: Data<AppState>) -> impl Responder {
     let mut validation_errors: HashMap<String,Vec<validation::Error<'static>>> = HashMap::new();
     let mut user_builder = user::Builder::new();
 
@@ -63,6 +63,60 @@ pub async fn sign_up(_req: HttpRequest, body: Json<SignInBody>, db: Data<AppStat
     }
 }
 
-// fn log_in(arg: Type) -> RetType {
-//     unimplemented!();
-// }
+
+#[derive(Deserialize)]
+struct SignInBody {
+    login: String,
+    password: String,
+}
+
+#[post("/signin")]
+async fn sign_in(_req: HttpRequest, body: Json<SignInBody>, db: Data<AppState>) -> impl Responder {
+    let mut validation_errors: HashMap<String,Vec<validation::Error<'static>>> = HashMap::new();
+
+    let mut login: Option<Login> = None;
+    match Login::parse(body.login.to_string()) {
+        Ok(val) => { login = Some(val) },
+        Err(e) => { validation_errors.insert("Login".to_string(), e); },
+    }
+
+    let mut password: Option<Password> = None;
+    match Password::parse(body.password.to_string()) {
+        Ok(val) => { password = Some(val) },
+        Err(e) => { validation_errors.insert("Password".to_string(), e); },
+    }
+
+    if !validation_errors.is_empty() {
+        return HttpResponse::build(StatusCode::BAD_REQUEST)
+                .json(validation_errors)
+    }
+
+    let user = User::get_user(
+        &db.db,
+        user::UserSearch {
+            login,
+            password,
+            id: None,
+            name: None
+        }
+    ).await;
+
+    match user {
+        Ok(user) => {
+            HttpResponse::build(StatusCode::OK)
+                .json(user)
+        },
+        Err(e) => {
+            eprintln!("{:?}",e);
+
+            let err_code: StatusCode = e.into();
+           
+            match err_code {
+                StatusCode::INTERNAL_SERVER_ERROR => HttpResponse::new(err_code),
+                _ => HttpResponse::build(err_code)
+                        .body("Wrong login or password")
+            }
+        },
+    }
+
+}

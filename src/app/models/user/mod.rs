@@ -2,10 +2,14 @@ mod auth;
 
 use crate::repository::db::SqlxError;
 use core::fmt;
+use std::any::Any;
+use actix_web::cookie::time::error::Format;
 use lib_utils::validation::{self, validate_rules, Rules, Validate};
+use redis::FromRedisValue;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::postgres::PgTypeKind;
+use sqlx::{query_as, Decode, Execute, FromRow, QueryBuilder, Type};
 use sqlx::{Pool, Postgres};
 
 // Custom validation rules
@@ -84,6 +88,10 @@ impl sqlx::Type<sqlx::Postgres> for Name {
     fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
     }
+
+    fn compatible(ty: &<sqlx::Postgres as sqlx::Database>::TypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
 }
 
 // Login
@@ -121,6 +129,10 @@ impl Login {
 impl sqlx::Type<sqlx::Postgres> for Login {
     fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &<sqlx::Postgres as sqlx::Database>::TypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
 
@@ -166,21 +178,71 @@ impl sqlx::Type<sqlx::Postgres> for Password {
     fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
     }
+
+    fn compatible(ty: &<sqlx::Postgres as sqlx::Database>::TypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
 }
 
 // Uuid
-#[derive(Debug, Serialize, Deserialize, Clone, sqlx::Decode, sqlx::Encode)]
-pub struct Uuid(uuid::Uuid);
+#[derive(Debug, Deserialize, Clone, sqlx::Decode, sqlx::Encode)]
+pub struct Uuid([u8; 16]);
 
 impl sqlx::Type<sqlx::Postgres> for Uuid {
     fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
-        <uuid::Uuid as sqlx::Type<sqlx::Postgres>>::type_info()
+        <Vec<u8> as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &<sqlx::Postgres as sqlx::Database>::TypeInfo) -> bool {
+        <Vec<u8> as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+// impl<'r,DB: sqlx::Database> sqlx::Decode<'r,DB> for Uuid
+// where
+//     [u8; 16]: sqlx::Decode<'r, DB>
+//  {
+//     fn decode(value: <DB as sqlx::database::HasValueRef<'r>>::ValueRef) -> Result<Self, sqlx::error::BoxDynError> {
+//         let value = <[u8; 16] as sqlx::Decode<DB>>::decode(value)?;
+
+//         // let sliced_value: [u8; 16] = value
+//         //     .as_bytes()
+//         //     .try_into()
+//         //     .expect("Error converting from String to Uuid: UUID must be 16 bytes");
+
+//         Ok(Uuid(value))
+//     }
+// }
+
+impl From<[u8; 16]> for Uuid {
+    fn from(value: [u8; 16]) -> Self {
+        Uuid(value)
+    }
+}
+
+impl From<Uuid> for [u8; 16] {
+    fn from(value: Uuid) -> Self {
+        value.0
+    }
+}
+
+impl From<Uuid> for uuid::Uuid {
+    fn from(value: Uuid) -> Self {
+        uuid::Uuid::from_bytes(value.0)
     }
 }
 
 impl std::fmt::Display for Uuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", &uuid::Uuid::from_bytes(self.0).to_string())
+    }
+}
+
+impl Serialize for Uuid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
@@ -191,13 +253,22 @@ impl std::convert::From<String> for Uuid {
             .try_into()
             .expect("Error converting from String to Uuid: UUID must be 16 bytes");
 
-        Uuid(uuid::Builder::from_bytes(bytes).into_uuid())
+        Uuid(bytes)
     }
+}
+
+impl From<Vec<u8>> for Uuid {
+    fn from(value: Vec<u8>) -> Self {
+        let bytes: [u8; 16] = value
+            .try_into()
+            .expect("Error converting from String to Uuid: UUID must be 16 bytes");
+            
+        Uuid(bytes) }
 }
 
 impl Uuid {
     pub fn parse(uuid: uuid::Uuid) -> Self {
-        Uuid(uuid)
+        Uuid(uuid.into_bytes())
     }
 }
 
@@ -208,6 +279,14 @@ pub(crate) struct User {
     pub name: Name,
     pub login: Login,
     pub password: Password,
+}
+
+pub struct UserSearch {
+    pub id: Option<Uuid>,
+    pub name: Option<Name>,
+    pub login: Option<Login>,
+    pub password: Option<Password>,
+    
 }
 
 pub trait UserRepository<T: sqlx::Database> {
@@ -223,6 +302,7 @@ pub trait UserRepository<T: sqlx::Database> {
     async fn patch_user(db: &Pool<T>, user: User) -> Result<(), SqlxError>;
     async fn patch_many_users(db: &Pool<T>, users: Vec<User>) -> Result<(), SqlxError>;
 
+    async fn get_user(db: &Pool<T>, user: UserSearch) -> Result<User,SqlxError>;
 
 }
 
@@ -286,7 +366,7 @@ impl UserRepository<Postgres> for User {
         sqlx::query_as!(
             User,
             "INSERT INTO users (id, name, login, password) VALUES ($1, $2, $3, $4)",
-            &user.id.to_string(),
+            &user.id.0,
             &user.name.0,
             &user.login.0,
             &user.password.0
@@ -311,7 +391,7 @@ impl UserRepository<Postgres> for User {
         for user in users {
             sqlx::query!(
                 "INSERT INTO users (id, name, login, password) VALUES ($1, $2, $3, $4)",
-                &user.id.to_string(),
+                &user.id.0,
                 &user.name.0,
                 &user.login.0,
                 &user.password.0,
@@ -326,7 +406,7 @@ impl UserRepository<Postgres> for User {
     }
 
     async fn delete_user(db: &Pool<Postgres>, user_id: Uuid) -> Result<(), SqlxError> {
-        sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.to_string())
+        sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.0)
             .execute(db)
             .await?;
         Ok(())
@@ -336,7 +416,7 @@ impl UserRepository<Postgres> for User {
         let mut tx = db.begin().await?;
 
         for user_id in users_id {
-            sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.to_string())
+            sqlx::query!("DELETE FROM users WHERE id = $1", &user_id.0)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -349,7 +429,7 @@ impl UserRepository<Postgres> for User {
     async fn patch_user(db: &Pool<Postgres>, user: User) -> Result<(), SqlxError> {
         sqlx::query!(
             "UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1",
-            &user.id.to_string(),
+            &user.id.0,
             &user.name.0,
             &user.login.0,
             &user.password.0
@@ -365,7 +445,7 @@ impl UserRepository<Postgres> for User {
         for user in users {
             sqlx::query!(
                 "UPDATE users SET name = $2, login = $3, password = $4 WHERE id = $1",
-                &user.id.to_string(),
+                &user.id.0,
                 &user.name.0,
                 &user.login.0,
                 &user.password.0,
@@ -377,6 +457,39 @@ impl UserRepository<Postgres> for User {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    async fn get_user(db: &Pool<Postgres>, user: UserSearch) -> Result<User,SqlxError> {
+        let mut query = QueryBuilder::new("SELECT id, name, login, password FROM users WHERE");
+
+        let mut first = true;
+
+        if let Some(id) = user.id {
+            if !first { query.push(" AND"); } else { first = false }
+            query.push(format!(" id = '{}'",id.to_string()));
+        }
+
+        if let Some(name) = user.name {
+            if !first { query.push(" AND"); } else { first = false }
+            query.push(format!(" name = '{}'",name.to_string()));
+        }
+
+        if let Some(login) = user.login {
+            if !first { query.push(" AND"); } else { first = false }
+            query.push(format!(" login = '{}'",login.to_string()));
+        }
+
+        if let Some(password) = user.password {
+            if !first { query.push(" AND"); } else { first = false }
+            query.push(format!(" password = '{}'",password.to_string()));
+        }
+
+        Ok(
+            query
+                .build_query_as::<User>()
+                .fetch_one(db)
+                .await?
+        )
     }
 
 }
